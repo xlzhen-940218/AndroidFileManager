@@ -361,7 +361,7 @@ def upload_file(device_id):
 @device_id_required
 @handle_api_errors
 def get_file(device_id):
-    """API: 获取设备文件"""
+    """API: 获取设备文件（下载）"""
     file_path = request.args.get('file_path')
     category = request.args.get('category')
     file_name = request.args.get('file_name')
@@ -378,6 +378,45 @@ def get_file(device_id):
     except Exception as e:
         logger.error(f"发送文件失败: {str(e)}")
         return jsonify({'error': f'Failed to send file: {str(e)}'}), 500
+
+@app.route('/api/preview', methods=['GET'])
+@device_id_required
+@handle_api_errors
+def preview_file(device_id):
+    """API: 预览文件（用于内联显示）"""
+    file_path = request.args.get('file_path')
+    category = request.args.get('category')
+    file_name = request.args.get('file_name')
+    
+    if not all([file_path, category, file_name]):
+        return jsonify({'error': 'Missing required parameters'}), 400
+    
+    local_file, error = download_or_get_local(device_id, category, file_path, file_name)
+    if not local_file:
+        return jsonify({'error': 'File transfer failed', 'details': error}), 500
+    
+    try:
+        # 获取文件的MIME类型
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(file_name)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
+        
+        response = send_file(local_file)
+        # 设置Content-Disposition为inline，让浏览器尝试显示而不是下载
+        # 使用URL编码处理中文文件名，避免编码错误
+        import urllib.parse
+        encoded_filename = urllib.parse.quote(file_name, safe='')
+        # RFC 5987规范：使用UTF-8编码文件名
+        content_disposition = f'inline; filename="{encoded_filename}"; filename*=UTF-8\'\'{encoded_filename}'
+        response.headers['Content-Disposition'] = content_disposition
+        response.headers['Content-Type'] = mime_type
+        # 允许跨域加载资源（对于iframe预览很重要）
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
+    except Exception as e:
+        logger.error(f"预览文件失败: {str(e)}")
+        return jsonify({'error': f'Failed to preview file: {str(e)}'}), 500
 
 @app.route('/api/thumbnail', methods=['GET'])
 @device_id_required

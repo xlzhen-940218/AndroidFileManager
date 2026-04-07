@@ -49,8 +49,8 @@
 
 - 📤 上传文件 Upload files to device  （已完成/Completed）
 - 🗑️ 删除文件 Delete files  （已完成/Completed）
-- ✏️ 重命名文件 Rename files  
-- 📄 文档预览 Document preview  
+- ✏️ 重命名文件 Rename files  （已完成/Completed） 
+- 📄 文档预览 Document preview   （已完成/Completed）
 
 ---
 

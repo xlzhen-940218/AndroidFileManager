@@ -495,7 +495,9 @@ function getDocuments(documentType) {
             currentPage = 1; // 重置当前页码
             // 处理返回的文件数据
             data.forEach(file => {
-                const url = `/api/file?file_path=${encodeURIComponent(file._data)}&category=${documentType}&file_name=${encodeURIComponent(file._display_name)}&id=${serial_id}`;
+                // 对于文档，使用预览API，避免下载
+                const previewUrl = `/api/preview?file_path=${encodeURIComponent(file._data)}&category=${documentType}&file_name=${encodeURIComponent(file._display_name)}&id=${serial_id}`;
+                const downloadUrl = `/api/file?file_path=${encodeURIComponent(file._data)}&category=${documentType}&file_name=${encodeURIComponent(file._display_name)}&id=${serial_id}`;
                 filesData.push({
                     id: file._id,
                     data: file._data,
@@ -504,7 +506,8 @@ function getDocuments(documentType) {
                     type: documentType,
                     mime_type: file.mime_type,
                     date: formatTimestamp(file.date_added),
-                    previewUrl: url,
+                    previewUrl: previewUrl,
+                    downloadUrl: downloadUrl,
                     path: file.path
                 });
             });
@@ -1300,6 +1303,41 @@ function showPreview(file) {
                 </div>
             </div>
         `;
+    } else if (file.type === 'document' && file.mime_type && (
+        file.mime_type.includes('word') || 
+        file.mime_type.includes('excel') || 
+        file.mime_type.includes('powerpoint') ||
+        file.mime_type.includes('officedocument') ||
+        /\.(doc|docx|xls|xlsx|ppt|pptx)$/i.test(file.name)
+    )) {
+        // Office文档预览 - 使用Microsoft Office Online Viewer
+        const officeViewerUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(window.location.origin + file.previewUrl)}`;
+        previewHTML = `
+            <div class="pdf-preview-container">
+                <iframe src="${officeViewerUrl}" class="pdf-preview-frame" title="${file.name}" style="border: 1px solid #ddd;"></iframe>
+                <div class="pdf-preview-note">
+                    <i class="fas fa-info-circle"></i> 使用Microsoft Office Online Viewer预览，如果无法显示，请 <a href="${file.downloadUrl || file.previewUrl}" target="_blank">点击这里下载</a> 后查看
+                </div>
+            </div>
+            <div class="preview-details">
+                <div class="detail-item">
+                    <span class="detail-label">${t('type')}</span>
+                    <span class="detail-value">${t('document')} (Office)</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">${t('size')}</span>
+                    <span class="detail-value">${file.size}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">${t('date')}</span>
+                    <span class="detail-value">${file.date}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">${t('location')}</span>
+                    <span class="detail-value">${file.data}</span>
+                </div>
+            </div>
+        `;
     } else {
         // 通用文件预览
         let fileIcon = '';
@@ -1361,10 +1399,11 @@ function showPreview(file) {
         `;
     }
 
-    // 添加操作按钮
+    // 添加操作按钮 - 对于文档，使用downloadUrl进行下载，其他文件使用previewUrl
+    const downloadUrl = file.downloadUrl || file.previewUrl;
     previewHTML += `
         <div class="file-actions">
-            <button onclick="window.open('${file.previewUrl}')" class="action-btn">
+            <button onclick="window.open('${downloadUrl}')" class="action-btn">
                 <i class="fas fa-download"></i> ${t('download')}
             </button>
             <button class="action-btn" onclick="renameFile('${file.data}', '${file.name}')">
