@@ -288,6 +288,64 @@ function deleteFile(_data) {
         });
 }
 
+function renameFile(old_path, current_name) {
+    const new_name = prompt(`请输入新的文件名（当前名称：${current_name}）:`, current_name);
+    
+    if (!new_name || new_name.trim() === '' || new_name === current_name) {
+        return;
+    }
+    
+    const encoded_old_path = encodeURIComponent(old_path);
+    const encoded_new_name = encodeURIComponent(new_name.trim());
+    
+    fetch(`/api/rename_file?id=${serial_id}&old_path=${encoded_old_path}&new_name=${encoded_new_name}`, {
+        method: 'GET'
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                alert(`重命名失败: ${data.error}`);
+                return;
+            }
+            
+            alert('文件重命名成功！');
+            previewContainer.classList.remove('active');
+            
+            setTimeout(() => {
+                switch (currentCategory) {
+                    case 'image':
+                        getImages();
+                        break;
+                    case 'video':
+                        getVideos();
+                        break;
+                    case 'audio':
+                        getAudios();
+                        break;
+                    case 'document':
+                        getDocuments('document');
+                        break;
+                    case 'apk':
+                        getDocuments('apk');
+                        break;
+                    case 'zip':
+                        getDocuments('zip');
+                        break;
+                    case 'all':
+                        pathBar.style.display = '';
+                        pathHistory = [];
+                        renderPathBar();
+                        navigateToPath(currentPath);
+                        break;
+                }
+            }, 500);
+        })
+        .catch(error => {
+            console.error('重命名文件请求失败:', error);
+            alert('重命名请求失败，请检查网络连接');
+        });
+}
+
 // 更新电池状态
 function updateBattery(percent) {
     const batteryElement = document.getElementById('battery-level');
@@ -1214,6 +1272,34 @@ function showPreview(file) {
                 </div>
             </div>
         `;
+    } else if (file.type === 'document' && file.mime_type && file.mime_type.includes('pdf')) {
+        // PDF文档预览
+        previewHTML = `
+            <div class="pdf-preview-container">
+                <iframe src="${file.previewUrl}" class="pdf-preview-frame" title="${file.name}"></iframe>
+                <div class="pdf-preview-note">
+                    <i class="fas fa-info-circle"></i> 如果PDF无法显示，请 <a href="${file.previewUrl}" target="_blank">点击这里下载</a> 后查看
+                </div>
+            </div>
+            <div class="preview-details">
+                <div class="detail-item">
+                    <span class="detail-label">${t('type')}</span>
+                    <span class="detail-value">${t('document')} (PDF)</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">${t('size')}</span>
+                    <span class="detail-value">${file.size}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">${t('date')}</span>
+                    <span class="detail-value">${file.date}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">${t('location')}</span>
+                    <span class="detail-value">${file.data}</span>
+                </div>
+            </div>
+        `;
     } else {
         // 通用文件预览
         let fileIcon = '';
@@ -1281,7 +1367,7 @@ function showPreview(file) {
             <button onclick="window.open('${file.previewUrl}')" class="action-btn">
                 <i class="fas fa-download"></i> ${t('download')}
             </button>
-            <button class="action-btn">
+            <button class="action-btn" onclick="renameFile('${file.data}', '${file.name}')">
                 <i class="fas fa-share-alt"></i> ${t('rename')}
             </button>
             <button class="action-btn" onclick="deleteFile('${file.data}')">

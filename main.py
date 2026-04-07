@@ -291,6 +291,37 @@ def delete_files(device_id):
 
     return {'message': 'Files deleted successfully'}, 200
 
+@app.route('/api/rename_file')
+@device_id_required
+def rename_file(device_id):
+    """重命名文件API"""
+    old_path = request.args.get('old_path')
+    new_name = request.args.get('new_name')
+    
+    if not old_path or not new_name:
+        return {'error': 'Missing old_path or new_name'}, 400
+    
+    # 获取文件所在目录和旧文件名
+    import os
+    dir_path = os.path.dirname(old_path)
+    if not dir_path:
+        return {'error': 'Invalid file path'}, 400
+    
+    # 构建新路径
+    new_path = dir_path + '/' + new_name
+    
+    logger.info(f"Renaming file: {old_path} to {new_path} on device: {device_id}")
+    
+    # 调用ADB命令重命名文件
+    # 注意：ADB shell中的mv命令需要使用引号包裹路径
+    adb_command = ['shell', 'mv', f'"{old_path}"', f'"{new_path}"']
+    try:
+        run_adb_command(adb_command, device_id)
+        return {'message': 'File renamed successfully', 'new_path': new_path}, 200
+    except Exception as e:
+        logger.error(f"重命名文件失败: {str(e)}")
+        return {'error': f'Failed to rename file: {str(e)}'}, 500
+
 @app.route('/api/upload', methods=['POST'])
 @device_id_required
 def upload_file(device_id):
