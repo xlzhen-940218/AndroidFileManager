@@ -20,11 +20,9 @@ app.use(fileUpload());
 
 // 中间件：重写Flask模板语法到Node.js路径
 app.use(async (req, res, next) => {
-  // 只处理HTML文件
   if (req.path.endsWith('.html') || req.path === '/') {
     try {
       const filePath = path.join(__dirname, 'templates', req.path === '/' ? 'device_connect.html' : req.path);
-      // 使用正确的文件读取方式
       fs.readFile(filePath, 'utf8', (err, data) => {
         if (err) {
           if (err.code === 'ENOENT') {
@@ -33,7 +31,6 @@ app.use(async (req, res, next) => {
           return next(err);
         }
 
-        // 替换Flask模板语法为Node.js路径
         let html = data.replace(
           /{{\s*url_for\('static',\s*filename=('|")([^'"]+)('|")\s*\)\s*}}/g,
           '/static/$2'
@@ -42,10 +39,10 @@ app.use(async (req, res, next) => {
         res.send(html);
       });
     } catch (err) {
-      next(err); // 文件不存在或其他错误
+      next(err); 
     }
   } else {
-    next(); // 非HTML文件继续正常处理
+    next();
   }
 });
 
@@ -72,7 +69,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 const BASE_DIR = __dirname;
 const STORAGE_DIR = path.join(BASE_DIR, 'storage');
 const CACHE_DIR = path.join(BASE_DIR, '.cache_thumbnail');
-const ADB_TIMEOUT = 30000; // 30秒超时
+const ADB_TIMEOUT = 3000000; // 【修复】对应Python版本，3000秒超时，防止大视频传输中断
 const PER_PAGE = 64;
 
 // 确保目录存在
@@ -159,22 +156,17 @@ const parseLsOutput = (lsText, dirPath) => {
   const result = [];
   const lines = lsText.trim().split('\n');
 
-  // 规范化目录路径
   const normalizedDir = dirPath.endsWith('/') ? dirPath : `${dirPath}/`;
   const regex = /^([d-])([rwxst-]{9})\s+(\d+)\s+(\S+)\s+(\S+)\s+(\s*\d+(?:\.\d+)?[KMG]?B?)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s+(.+)$/;
   for (const line of lines) {
-    // 使用正则表达式匹配行
     const match = line.trim().match(regex);
     if (!match) {
-      logger.warn(`无法解析行: ${line}`);
       continue;
     }
-    logger.info(`解析行: ${line}`);
     const [
       , entryType, permissions, links, owner, group, sizeStr, dateStr, timeStr, name
     ] = match;
 
-    // 处理文件大小
     const sizeVal = parseFloat(sizeStr.replace(/[^\d.]/g, ''));
     let size = sizeVal;
 
@@ -182,7 +174,6 @@ const parseLsOutput = (lsText, dirPath) => {
     else if (sizeStr.toUpperCase().includes('M')) size *= 1024 * 1024;
     else if (sizeStr.toUpperCase().includes('G')) size *= 1024 * 1024 * 1024;
 
-    // 转换日期时间
     let timestamp = "0";
     try {
       const dt = new Date(`${dateStr}T${timeStr}:00`);
@@ -191,7 +182,6 @@ const parseLsOutput = (lsText, dirPath) => {
       logger.warn(`日期解析失败: ${dateStr} ${timeStr}`);
     }
 
-    // 确定MIME类型
     let mimeType;
     if (entryType === 'd') {
       mimeType = 'inode/directory';
@@ -199,7 +189,6 @@ const parseLsOutput = (lsText, dirPath) => {
       mimeType = mime.lookup(name) || 'application/octet-stream';
     }
 
-    // 构建结果对象
     result.push({
       _data: normalizedDir + name,
       _display_name: name,
@@ -216,43 +205,69 @@ const parseLsOutput = (lsText, dirPath) => {
 // 生成缩略图
 const generateThumbnail = (mediaPath) => {
   return new Promise((resolve) => {
-    ensureDirectory(CACHE_DIR);
+    try {
+      ensureDirectory(CACHE_DIR);
 
-    const ext = path.extname(mediaPath);
-    const baseName = path.basename(mediaPath, ext);
-    const thumbPath = path.join(CACHE_DIR, `${baseName}_thumb.jpg`);
-
-    // 如果缩略图已存在则直接返回
-    if (fs.existsSync(thumbPath)) {
-      return resolve(thumbPath);
-    }
-
-    // FFmpeg命令：缩放并裁剪
-    const ffmpegCmd = [
-      'ffmpeg',
-      '-i', mediaPath,
-      '-vf', 'scale=960:960:force_original_aspect_ratio=decrease',
-      '-vframes', '1',
-      '-y',
-      '-loglevel', 'error',
-      thumbPath
-    ];
-
-    const child = spawn(ffmpegCmd[0], ffmpegCmd.slice(1));
-
-    child.on('close', (code) => {
-      if (code === 0 && fs.existsSync(thumbPath)) {
-        resolve(thumbPath);
-      } else {
-        logger.error(`缩略图生成失败: ${mediaPath}`);
-        resolve('');
+      if (!fs.existsSync(mediaPath)) {
+        logger.error(`源文件不存在: ${mediaPath}`);
+        return resolve('');
       }
-    });
 
-    child.on('error', (err) => {
-      logger.error(`FFmpeg执行错误: ${err.message}`);
+      const ext = path.extname(mediaPath);
+      const baseName = path.basename(mediaPath, ext);
+      const safeBaseName = baseName.replace(/[<>:"/\\|?*]/g, '_');
+      const thumbPath = path.join(CACHE_DIR, `${safeBaseName}_thumb.jpg`);
+
+      if (fs.existsSync(thumbPath)) {
+        return resolve(thumbPath);
+      }
+
+      logger.info(`生成缩略图: ${mediaPath} -> ${thumbPath}`);
+
+      const ffmpegCmd = [
+        'ffmpeg',
+        '-i', mediaPath,
+        '-vf', 'scale=960:960:force_original_aspect_ratio=decrease',
+        '-vframes', '1',
+        '-y',
+        '-loglevel', 'error',
+        thumbPath
+      ];
+
+      const child = spawn(ffmpegCmd[0], ffmpegCmd.slice(1));
+      let stderrData = '';
+      
+      child.stderr.on('data', (data) => {
+        stderrData += data.toString();
+      });
+
+      child.on('close', (code) => {
+        if (code === 0 && fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
+          resolve(thumbPath);
+        } else {
+          logger.error(`缩略图生成失败: ${mediaPath}, 错误: ${stderrData}`);
+          if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
+          resolve('');
+        }
+      });
+
+      child.on('error', (err) => {
+        logger.error(`FFmpeg执行错误: ${err.message}`);
+        resolve('');
+      });
+      
+      setTimeout(() => {
+        if (child.exitCode === null) {
+          logger.error(`FFmpeg命令超时: ${mediaPath}`);
+          child.kill();
+          resolve('');
+        }
+      }, 10000);
+      
+    } catch (err) {
+      logger.error(`缩略图生成异常: ${err.message}`);
       resolve('');
-    });
+    }
   });
 };
 
@@ -276,33 +291,27 @@ const parseAdbOutput = (output, type = 'image') => {
     try {
       const item = match.groups;
 
-      // 转换数值类型字段
+      // 【修复】将 video 也纳入 width 和 height 的解析中
       const intFields = ['_id', '_size'];
-      if (type === 'image') intFields.push('width', 'height');
+      if (type === 'image' || type === 'video') intFields.push('width', 'height');
 
       for (const field of intFields) {
         if (item[field]) item[field] = parseInt(item[field], 10);
       }
 
-      // 处理显示名称
       if (item._display_name === 'NULL') {
         item._display_name = path.basename(item._data);
       }
 
-      // 添加路径信息
       item.path = path.dirname(item._data) + '/';
-
       result.push(item);
     } catch (e) {
       logger.warn(`解析行失败: ${line} - ${e.message}`);
     }
   }
-
-  logger.info(`成功解析 ${result.length} 个${type}条目`);
   return result;
 };
 
-// 获取媒体列表
 const getMediaList = async (deviceId, mediaType) => {
   const uriMap = {
     image: 'content://media/external/images/media',
@@ -333,7 +342,8 @@ const getMediaList = async (deviceId, mediaType) => {
   return parseAdbOutput(stdout, mediaType);
 };
 
-// API路由
+// =================== API 路由 ===================
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'templates', 'device_connect.html'));
 });
@@ -349,80 +359,66 @@ app.get('/api/storagedir', (req, res) => {
 app.get('/api/delete_file', deviceIdRequired, async (req, res) => {
   const { deviceId } = req;
   const { data } = req.query;
-  if (!data) {
-    return res.status(400).json({ error: 'Missing required parameter: data' });
-  }
+  if (!data) return res.status(400).json({ error: 'Missing required parameter: data' });
 
   try {
-    const adbCommand = [
-      'shell',
-      'rm',
-      `"${data}"`
-    ];
-
+    const adbCommand = ['shell', 'rm', `"${data}"`];
     const { stdout } = await runAdbCommand(adbCommand, deviceId);
-    return res.json({
-      success: true,
-      message: `文件删除成功: ${data}`,
-      details: stdout.trim()
-    });
+    return res.json({ success: true, message: `文件删除成功`, details: stdout.trim() });
   } catch (err) {
-    logger.error(`获取文档失败: ${err.message}`);
-    return res.status(500).json({
-      error: "ADB命令执行失败",
-      details: err.message
-    });
+    logger.error(`删除文件失败: ${err.message}`);
+    return res.status(500).json({ error: "ADB命令执行失败", details: err.message });
   }
 });
 
-// 文件上传路由
-app.post('/api/upload', deviceIdRequired, async (req, res) => {
-  const category = req.query.category;
-  const deviceId = req.deviceId;
-
-  if (!category) {
-    return res.status(400).json({ error: 'Missing category' });
+app.get('/api/rename_file', deviceIdRequired, async (req, res) => {
+  const { deviceId } = req;
+  const { old_path, new_name } = req.query;
+  if (!old_path || !new_name) return res.status(400).json({ error: 'Missing parameters' });
+  
+  try {
+    const dir_path = path.dirname(old_path);
+    const new_path = path.posix.join(dir_path, new_name);
+    
+    const adbCommand = ['shell', 'mv', `"${old_path}"`, `"${new_path}"`];
+    await runAdbCommand(adbCommand, deviceId);
+    
+    return res.json({ message: 'File renamed successfully', new_path });
+  } catch (err) {
+    logger.error(`重命名文件失败: ${err.message}`);
+    return res.status(500).json({ error: `Failed to rename: ${err.message}` });
   }
+});
 
-  if (!req.files || !req.files.file) {
-    return res.status(400).json({ error: 'No file part' });
+app.post('/api/upload', deviceIdRequired, async (req, res) => {
+  const { category } = req.query;
+  const { deviceId } = req;
+
+  if (!category || !req.files || !req.files.file || !req.files.file.name) {
+    return res.status(400).json({ error: 'Missing required fields or file' });
   }
 
   const file = req.files.file;
-  if (!file.name || file.name.trim() === '') {
-    return res.status(400).json({ error: 'No selected file' });
-  }
 
   try {
-    // 创建上传目录
     const baseDir = path.join(__dirname, 'uploads');
     const categoryDir = path.join(baseDir, category);
-    
     if (!fs.existsSync(baseDir)) fs.mkdirSync(baseDir);
     if (!fs.existsSync(categoryDir)) fs.mkdirSync(categoryDir);
 
-    // 保存文件
     const filePath = path.join(categoryDir, file.name);
-    await file.mv(filePath);  // 使用express-fileupload的mv方法
+    await file.mv(filePath);
 
-    // 准备ADB命令
     const absolutePath = path.resolve(filePath);
     const phonePath = `/sdcard/PC/${category}/${file.name}`;
     const phoneDir = `/sdcard/PC/${category}/`;
-    const adbArgs = ['push', absolutePath, phonePath];
+    
+    await runAdbCommand(['push', absolutePath, phonePath], deviceId);
 
-    // 执行ADB命令
-    await runAdbCommand(adbArgs, deviceId);
-
-    res.status(200).json({
-      message: 'File uploaded successfully',
-      filename: file.name,
-      phonedir: phoneDir
-    });
-
+    res.status(200).json({ message: 'Uploaded successfully', filename: file.name, phonedir: phoneDir });
   } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({ error: error.message || 'File processing failed' });
+    logger.error(`Upload error: ${error.message}`);
+    res.status(500).json({ error: error.message || 'Upload failed' });
   }
 });
 
@@ -431,54 +427,29 @@ app.get('/api/file', deviceIdRequired, async (req, res) => {
   const { file_path, category, file_name } = req.query;
 
   if (!file_path || !category || !file_name) {
-    return res.status(400).json({
-      error: 'Missing required parameters: file_path, category, file_name'
-    });
+    return res.status(400).json({ error: 'Missing required parameters' });
   }
 
   const targetDir = path.join(STORAGE_DIR, deviceId, category);
   ensureDirectory(targetDir);
-
   const localFile = path.join(targetDir, file_name);
 
-  // 如果文件不存在，尝试从设备拉取
   if (!fs.existsSync(localFile)) {
     const { success, message } = await pullFileFromDevice(deviceId, file_path, localFile);
-    if (!success) {
-      return res.status(500).json({
-        error: 'File transfer failed',
-        details: message
-      });
-    }
-
-    // 再次验证是否拉取成功
-    if (!fs.existsSync(localFile)) {
-      return res.status(404).json({
-        error: 'File not found after transfer attempt',
-        details: message
-      });
+    if (!success || !fs.existsSync(localFile)) {
+      return res.status(500).json({ error: 'File transfer failed', details: message });
     }
   }
 
-  // 返回文件
-  // res.download(localFile, file_name, (err) => {
-  //   if (err) {
-  //     logger.error(`发送文件失败: ${err.message}`);
-  //     res.status(500).json({ error: `Failed to send file: ${err.message}` });
-  //   }
-  // });
+  // 【修复】将 dotfiles 设置为 allow，以防用户下载安卓隐藏文件（如 .nomedia）时报错
   res.sendFile(localFile, {
     headers: {
-      "Content-Disposition": `attachment; filename=${encodeURIComponent(file_name)}`
+      "Content-Disposition": `attachment; filename="${encodeURIComponent(file_name)}"; filename*=UTF-8''${encodeURIComponent(file_name)}`
     },
-    dotfiles: "deny"
+    dotfiles: "allow" 
   }, (err) => {
-    if (err) {
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      } else {
-        logger.error("传输中断:", err.message);
-      }
+    if (err && !res.headersSent) {
+      res.status(500).json({ error: err.message });
     }
   });
 });
@@ -488,89 +459,111 @@ app.get('/api/thumbnail', deviceIdRequired, async (req, res) => {
   const { file_path, category, file_name } = req.query;
 
   if (!file_path || !category || !file_name) {
-    return res.status(400).json({
-      error: 'Missing required parameters: file_path, category, file_name'
-    });
+    return res.status(400).json({ error: 'Missing required parameters' });
   }
 
   const targetDir = path.join(STORAGE_DIR, deviceId, category);
   ensureDirectory(targetDir);
-
   const localFile = path.join(targetDir, file_name);
 
-  // 如果文件不存在，尝试从设备拉取
   if (!fs.existsSync(localFile)) {
     const { success, message } = await pullFileFromDevice(deviceId, file_path, localFile);
-    if (!success) {
-      return res.status(500).json({
-        error: 'File transfer failed',
-        details: message
-      });
-    }
-
-    // 再次验证是否拉取成功
-    if (!fs.existsSync(localFile)) {
-      return res.status(404).json({
-        error: 'File not found after transfer attempt',
-        details: message
-      });
+    if (!success || !fs.existsSync(localFile)) {
+      return res.status(500).json({ error: 'File transfer failed', details: message });
     }
   }
 
   try {
     const thumbPath = await generateThumbnail(localFile);
-    if (!thumbPath) {
+    if (!thumbPath || !fs.existsSync(thumbPath)) {
       return res.status(500).json({ error: 'Thumbnail generation failed' });
     }
 
-    // 设置缓存头
-    res.set('Cache-Control', 'public, max-age=86400');
-    res.sendFile(thumbPath);
+    res.set({
+      'Cache-Control': 'public, max-age=86400',
+      'Content-Type': 'image/jpeg',
+      'Access-Control-Allow-Origin': '*'
+    });
+    
+    // 【修复核心问题】由于文件在 .cache_thumbnail 隐藏文件夹内，必须设置 dotfiles: 'allow' Express 才准许发送
+    res.sendFile(thumbPath, { dotfiles: 'allow' }, (err) => {
+      if (err) {
+        logger.error(`发送缩略图文件失败: ${err.message}`);
+        if (!res.headersSent) {
+          res.status(500).json({ error: `Failed to send thumbnail file: ${err.message}` });
+        }
+      }
+    });
   } catch (err) {
     logger.error(`发送缩略图失败: ${err.message}`);
     res.status(500).json({ error: `Failed to send thumbnail: ${err.message}` });
   }
 });
 
+app.get('/api/preview', deviceIdRequired, async (req, res) => {
+  const { deviceId } = req;
+  const { file_path, category, file_name } = req.query;
+  
+  if (!file_path || !category || !file_name) return res.status(400).json({ error: 'Missing parameters' });
+  
+  const targetDir = path.join(STORAGE_DIR, deviceId, category);
+  ensureDirectory(targetDir);
+  const localFile = path.join(targetDir, file_name);
+  
+  if (!fs.existsSync(localFile)) {
+    const { success, message } = await pullFileFromDevice(deviceId, file_path, localFile);
+    if (!success || !fs.existsSync(localFile)) {
+      return res.status(500).json({ error: 'File transfer failed', details: message });
+    }
+  }
+  
+  try {
+    const mimeType = mime.lookup(file_name) || 'application/octet-stream';
+    const encodedFilename = encodeURIComponent(file_name);
+    const contentDisposition = `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`;
+    
+    res.set({
+      'Content-Disposition': contentDisposition,
+      'Content-Type': mimeType,
+      'Access-Control-Allow-Origin': '*'
+    });
+    
+    // 【修复】同理加上 dotfiles: 'allow'
+    res.sendFile(localFile, { dotfiles: 'allow' }, (err) => {
+      if (err && !res.headersSent) {
+        logger.error(`预览文件失败: ${err.message}`);
+        res.status(500).json({ error: `Failed to preview file: ${err.message}` });
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Failed to preview file: ${err.message}` });
+  }
+});
+
 app.get('/api/get_images', deviceIdRequired, async (req, res) => {
   try {
-    const { deviceId } = req;
-    const images = await getMediaList(deviceId, 'image');
+    const images = await getMediaList(req.deviceId, 'image');
     res.json(images);
   } catch (err) {
-    logger.error(`获取图像失败: ${err.message}`);
-    res.status(500).json({
-      error: "ADB命令执行失败",
-      details: err.message
-    });
+    res.status(500).json({ error: "ADB命令执行失败", details: err.message });
   }
 });
 
 app.get('/api/get_videos', deviceIdRequired, async (req, res) => {
   try {
-    const { deviceId } = req;
-    const videos = await getMediaList(deviceId, 'video');
+    const videos = await getMediaList(req.deviceId, 'video');
     res.json(videos);
   } catch (err) {
-    logger.error(`获取视频失败: ${err.message}`);
-    res.status(500).json({
-      error: "ADB命令执行失败",
-      details: err.message
-    });
+    res.status(500).json({ error: "ADB命令执行失败", details: err.message });
   }
 });
 
 app.get('/api/get_audios', deviceIdRequired, async (req, res) => {
   try {
-    const { deviceId } = req;
-    const audios = await getMediaList(deviceId, 'audio');
+    const audios = await getMediaList(req.deviceId, 'audio');
     res.json(audios);
   } catch (err) {
-    logger.error(`获取音频失败: ${err.message}`);
-    res.status(500).json({
-      error: "ADB命令执行失败",
-      details: err.message
-    });
+    res.status(500).json({ error: "ADB命令执行失败", details: err.message });
   }
 });
 
@@ -578,110 +571,67 @@ app.get('/api/get_documents', deviceIdRequired, async (req, res) => {
   const { deviceId } = req;
   const documentType = req.query.document_type || 'document';
 
-  let suffixRegex;
-  switch (documentType) {
-    case 'zip':
-      suffixRegex = "'\\.(zip|rar|7z|tar|gz)'";
-      break;
-    case 'apk':
-      suffixRegex = "'\\.(apk)'";
-      break;
-    default:
-      suffixRegex = "'\\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|odt|ods|odp)'";
-  }
+  let suffixRegex = "'\\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|odt|ods|odp)'";
+  if (documentType === 'zip') suffixRegex = "'\\.(zip|rar|7z|tar|gz)'";
+  if (documentType === 'apk') suffixRegex = "'\\.(apk)'";
 
   try {
     const adbCommand = [
       'shell',
       `content query --uri content://media/external/file --projection _id:_data:mime_type:_size:_display_name:date_added | grep -E ${suffixRegex}`
     ];
-
     const { stdout } = await runAdbCommand(adbCommand, deviceId);
     const documents = parseAdbOutput(stdout, 'document');
     res.json(documents);
   } catch (err) {
-    logger.error(`获取文档失败: ${err.message}`);
-    res.status(500).json({
-      error: "ADB命令执行失败",
-      details: err.message
-    });
+    res.status(500).json({ error: "ADB命令执行失败", details: err.message });
   }
 });
 
 app.get('/api/get_files', deviceIdRequired, async (req, res) => {
   const { deviceId } = req;
   let pathParam = req.query.path || '/sdcard/';
-
-  // 确保路径以斜杠结尾
-  if (!pathParam.endsWith('/')) {
-    pathParam += '/';
-  }
+  if (!pathParam.endsWith('/')) pathParam += '/';
 
   try {
-    const adbCommand = [
-      'shell', "ls", "-lh", `'${pathParam}'`
-    ];
-
+    const adbCommand = ['shell', "ls", "-lh", `'${pathParam}'`];
     const { stdout } = await runAdbCommand(adbCommand, deviceId);
     const files = parseLsOutput(stdout, pathParam);
     res.json(files);
   } catch (err) {
-    logger.error(`获取文件失败: ${err.message}`);
-    res.status(500).json({
-      error: "ADB命令执行失败",
-      details: err.message
-    });
+    res.status(500).json({ error: "ADB命令执行失败", details: err.message });
   }
 });
 
 app.get('/screenshot/:deviceId', async (req, res) => {
   const { deviceId } = req.params;
-
   try {
-    const command = `adb -s ${deviceId} exec-out screencap -p`;
-
-    const child = spawn('adb', [
-      '-s', deviceId,
-      'exec-out', 'screencap', '-p'
-    ]);
-
+    const child = spawn('adb', ['-s', deviceId, 'exec-out', 'screencap', '-p']);
     res.set('Content-Type', 'image/png');
-
     child.stdout.pipe(res);
 
     child.on('error', (err) => {
       logger.error(`ADB错误: ${err.message}`);
-      res.status(500).send(`ADB Error: ${err.message}`);
+      if (!res.headersSent) res.status(500).send(`ADB Error: ${err.message}`);
     });
 
-    child.on('close', (code) => {
-      if (code !== 0) {
-        logger.error(`ADB命令失败，退出码: ${code}`);
-        res.status(500).send('ADB command failed');
-      }
-    });
-
-    // 设置超时
     setTimeout(() => {
       if (!res.headersSent) {
         child.kill();
         res.status(504).send('ADB command timed out');
       }
     }, 10000);
-
   } catch (err) {
-    logger.error(`获取截图失败: ${err.message}`);
     res.status(500).send(`Unexpected error: ${err.message}`);
   }
 });
 
-// 设备信息功能
+// =================== 设备信息相关 ===================
 const getDeviceName = async (deviceId) => {
   try {
     const { stdout } = await runAdbCommand('shell getprop ro.product.model', deviceId);
     return stdout.trim();
   } catch (err) {
-    logger.error(`获取设备名称失败: ${err.message}`);
     return 'Unknown Device';
   }
 };
@@ -690,26 +640,15 @@ const getStorageInfo = async (deviceId) => {
   try {
     const { stdout } = await runAdbCommand('shell df /data', deviceId);
     const lines = stdout.trim().split('\n');
-
-    if (lines.length < 2) {
-      throw new Error("存储信息格式错误");
-    }
-
     const parts = lines[lines.length - 1].split(/\s+/);
-    if (parts.length < 5) {
-      throw new Error("存储信息格式错误");
-    }
-
-    // 转换为GB
+    
     const totalKb = parseInt(parts[1], 10);
     const usedKb = parseInt(parts[2], 10);
-
-    const totalGb = Math.round(totalKb / (1024 * 1024) * 100) / 100;
-    const usedGb = Math.round(usedKb / (1024 * 1024) * 100) / 100;
-
-    return { total: totalGb, used: usedGb };
+    return {
+      total: Math.round(totalKb / (1024 * 1024) * 100) / 100,
+      used: Math.round(usedKb / (1024 * 1024) * 100) / 100
+    };
   } catch (err) {
-    logger.error(`获取存储信息失败: ${err.message}`);
     return { total: 0, used: 0 };
   }
 };
@@ -720,7 +659,6 @@ const getBatteryLevel = async (deviceId) => {
     const match = stdout.match(/level:\s*(\d+)/);
     return match ? parseInt(match[1], 10) : 0;
   } catch (err) {
-    logger.error(`获取电池电量失败: ${err.message}`);
     return 0;
   }
 };
@@ -728,7 +666,6 @@ const getBatteryLevel = async (deviceId) => {
 app.post('/api/device_info', deviceIdRequired, async (req, res) => {
   try {
     const { deviceId } = req;
-
     const [deviceName, storageInfo, batteryLevel] = await Promise.all([
       getDeviceName(deviceId),
       getStorageInfo(deviceId),
@@ -743,7 +680,6 @@ app.post('/api/device_info', deviceIdRequired, async (req, res) => {
       battery_use: batteryLevel
     });
   } catch (err) {
-    logger.error(`获取设备信息失败: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -758,15 +694,11 @@ const getAdbDevices = async () => {
       const line = lines[i].trim();
       if (line && line.endsWith('device')) {
         const parts = line.split(/\s+/);
-        if (parts.length > 0) {
-          devices.push(parts[0]);
-        }
+        if (parts.length > 0) devices.push(parts[0]);
       }
     }
-
     return { connected: devices.length > 0, devices };
   } catch (err) {
-    logger.error(`获取ADB设备失败: ${err.message}`);
     return { connected: false, devices: [] };
   }
 };
@@ -776,60 +708,32 @@ app.get('/api/get_device', async (req, res) => {
     const devices = await getAdbDevices();
     res.json(devices);
   } catch (err) {
-    res.status(500).json({
-      connected: false,
-      error: err.message
-    });
+    res.status(500).json({ connected: false, error: err.message });
   }
 });
 
-// 启动前检查
-// const verifyInstallation = async (tool) => {
-//   return new Promise((resolve) => {
-//     exec(`${tool} --version`, (error, stdout, stderr) => {
-//       if (error) {
-//         resolve({ success: false, message: `${tool} not found` });
-//       } else {
-//         resolve({ success: true, message: stdout.trim() });
-//       }
-//     });
-//   });
-// };
-
-// const installAdb = async () => {
-//   // 在实际应用中，这里应该包含安装ADB的逻辑
-//   // 由于平台差异，这里仅作为示例
-//   return { success: false, message: 'ADB installation not implemented' };
-// };
-
-// const installFfmpeg = async () => {
-//   // 在实际应用中，这里应该包含安装FFmpeg的逻辑
-//   return { success: false, message: 'FFmpeg installation not implemented' };
-// };
-
-// 启动服务器
+// =================== 启动服务器 ===================
 const startServer = async () => {
-  // 确保存储目录存在
   ensureDirectory(STORAGE_DIR);
   ensureDirectory(CACHE_DIR);
 
-  // 验证必要工具
-  const tools = [
-    { name: 'adb', installer: installAdb },
-    { name: 'ffmpeg', installer: installFfmpeg }
-  ];
+  if (typeof verifyInstallation === 'function') {
+    const tools = [
+      { name: 'adb', installer: installAdb },
+      { name: 'ffmpeg', installer: installFfmpeg }
+    ];
 
-  for (const tool of tools) {
-    const { success, message } = await verifyInstallation(tool.name);
-    logger.info(`${tool.name}验证结果: ${success}, 信息: ${message}`);
-
-    if (!success) {
-      const { success: installSuccess, message: installMessage } = await tool.installer();
-      logger.info(`${tool.name}安装结果: ${installSuccess}, 信息: ${installMessage}`);
+    for (const tool of tools) {
+      const { success, message } = await verifyInstallation(tool.name);
+      logger.info(`${tool.name}验证结果: ${success}, 信息: ${message}`);
+      if (!success && tool.installer) {
+        const { success: installSuccess, message: installMessage } = await tool.installer();
+        logger.info(`${tool.name}安装结果: ${installSuccess}, 信息: ${installMessage}`);
+      }
     }
   }
 
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     logger.info(`服务器运行在 http://0.0.0.0:${PORT}`);
     logger.info(`存储目录: ${STORAGE_DIR}`);
   });
